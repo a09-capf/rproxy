@@ -7,6 +7,8 @@
 package rproxy
 
 import (
+	"crypto/tls"
+	"errors"
 	"io"
 	"log"
 	"net"
@@ -34,6 +36,30 @@ type ReverseProxy struct {
 	// The transport used to perform proxy requests.
 	// If nil, http.DefaultTransport is used.
 	Transport http.RoundTripper
+
+	// Dial specifies the dial function for creating unencrypted
+	// Websocket connections.
+	// If Dial is nil, net.Dial is used.
+	Dial func(network, addr string) (net.Conn, error)
+
+	// DialTLS specifies an optional dial function for creating
+	// encrypted-Websocket connections for non-proxied HTTPS requests.
+	//
+	// If DialTLS is nil, Dial and TLSClientConfig are used.
+	//
+	// If DialTLS is set, the Dial hook is not used for HTTPS
+	// requests and the TLSClientConfig and TLSHandshakeTimeout
+	// are ignored. The returned net.Conn is assumed to already be
+	// past the TLS handshake.
+	DialTLS func(network, addr string) (net.Conn, error)
+
+	// TLSClientConfig specifies the TLS configuration to use with
+	// tls.Client. If nil, the default configuration is used.
+	TLSClientConfig *tls.Config
+
+	// TLSHandshakeTimeout specifies the maximum amount of time waiting to
+	// wait for a TLS handshake. Zero means no timeout.
+	TLSHandshakeTimeout time.Duration
 
 	// FlushInterval specifies the flush interval
 	// to flush to the client while copying the
@@ -102,6 +128,31 @@ func copyHeader(dst, src http.Header) {
 	}
 }
 
+func (p *ReverseProxy) dial(network, addr string) (net.Conn, error) {
+	if p.Dial != nil {
+		c, err := p.Dial(network, addr)
+		if c == nil && err == nil {
+			err = errors.New("rproxy: ReverseProxy.Dial hook returned (nil, nil)")
+		}
+		return c, err
+	}
+	return net.Dial(network, addr)
+}
+
+func (p *ReverseProxy) dialTLS(network, addr string) (net.Conn, error) {
+	if p.DialTLS != nil {
+		c, err := p.DialTLS("tcp", addr)
+		if c == nil && err == nil {
+			err = errors.New("rproxy: ReverseProxy.DialTLS returned (nil, nil)")
+		}
+	}
+
+	dialer := &net.Dialer{
+		Timeout: p.TLSHandshakeTimeout,
+	}
+	return tls.DialWithDialer(dialer, network, addr, p.TLSClientConfig)
+}
+
 func (p *ReverseProxy) tcpProxy(rw http.ResponseWriter, outreq *http.Request) {
 	clientConn, _, err := rw.(http.Hijacker).Hijack()
 	if err != nil {
@@ -112,10 +163,21 @@ func (p *ReverseProxy) tcpProxy(rw http.ResponseWriter, outreq *http.Request) {
 	defer clientConn.Close()
 
 	host := outreq.URL.Host
+	scheme := outreq.URL.Scheme
 	if !strings.ContainsRune(host, ':') {
-		host = host + ":80"
+		if scheme == "https" {
+			host = host + ":80"
+		} else {
+			host = host + ":443"
+		}
 	}
-	serverConn, err := net.Dial("tcp", host)
+
+	var serverConn net.Conn
+	if scheme == "https" {
+		serverConn, err = p.dialTLS("tcp", host)
+	} else {
+		serverConn, err = p.dial("tcp", host)
+	}
 	if err != nil {
 		p.logf("rproxy: can't connect to %s: %v", host, err)
 		rw.WriteHeader(http.StatusInternalServerError)
