@@ -171,9 +171,9 @@ func (p *ReverseProxy) tcpProxy(rw http.ResponseWriter, outreq *http.Request) {
 	scheme := outreq.URL.Scheme
 	if !hasPort(host) {
 		if scheme == "https" {
-			host = host + ":80"
-		} else {
 			host = host + ":443"
+		} else {
+			host = host + ":80"
 		}
 	}
 
