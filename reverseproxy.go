@@ -141,16 +141,48 @@ func (p *ReverseProxy) dial(network, addr string) (net.Conn, error) {
 
 func (p *ReverseProxy) dialTLS(network, addr string) (net.Conn, error) {
 	if p.DialTLS != nil {
-		c, err := p.DialTLS("tcp", addr)
+		c, err := p.DialTLS(network, addr)
 		if c == nil && err == nil {
 			err = errors.New("rproxy: ReverseProxy.DialTLS returned (nil, nil)")
 		}
 	}
 
-	dialer := &net.Dialer{
-		Timeout: p.TLSHandshakeTimeout,
+	plainConn, err := p.dial(network, addr)
+	if err != nil {
+		return nil, err
 	}
-	return tls.DialWithDialer(dialer, network, addr, p.TLSClientConfig)
+
+	cfg := new(tls.Config)
+	*cfg = *p.TLSClientConfig
+	if cfg.ServerName == "" {
+		if hasPort(addr) {
+			cfg.ServerName = addr[:strings.LastIndex(addr, ":")]
+		} else {
+			cfg.ServerName = addr
+		}
+	}
+	tlsConn := tls.Client(plainConn, cfg)
+
+	errc := make(chan error, 2)
+	var timer *time.Timer // for canceling TLS handshake
+	if d := p.TLSHandshakeTimeout; d != 0 {
+		timer = time.AfterFunc(d, func() {
+			errc <- errors.New("rproxy: TLS handshake timeout")
+		})
+	}
+	go func() {
+		err := tlsConn.Handshake()
+		if timer != nil {
+			timer.Stop()
+		}
+		errc <- err
+	}()
+	if err := <-errc; err != nil {
+		plainConn.Close()
+		return nil, err
+	}
+
+	return tlsConn, nil
 }
 
 // From https://golang.org/src/net/http/client.go
