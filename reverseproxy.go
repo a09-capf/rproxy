@@ -153,6 +153,11 @@ func (p *ReverseProxy) dialTLS(network, addr string) (net.Conn, error) {
 	return tls.DialWithDialer(dialer, network, addr, p.TLSClientConfig)
 }
 
+// From https://golang.org/src/net/http/client.go
+// Given a string of the form "host", "host:port", or "[ipv6::address]:port",
+// return true if the string includes a port.
+func hasPort(s string) bool { return strings.LastIndex(s, ":") > strings.LastIndex(s, "]") }
+
 func (p *ReverseProxy) tcpProxy(rw http.ResponseWriter, outreq *http.Request) {
 	clientConn, _, err := rw.(http.Hijacker).Hijack()
 	if err != nil {
@@ -164,7 +169,7 @@ func (p *ReverseProxy) tcpProxy(rw http.ResponseWriter, outreq *http.Request) {
 
 	host := outreq.URL.Host
 	scheme := outreq.URL.Scheme
-	if !strings.ContainsRune(host, ':') {
+	if !hasPort(host) {
 		if scheme == "https" {
 			host = host + ":80"
 		} else {
