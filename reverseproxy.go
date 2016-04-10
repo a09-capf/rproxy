@@ -7,7 +7,6 @@
 package rproxy
 
 import (
-	"fmt"
 	"io"
 	"log"
 	"net"
@@ -103,11 +102,12 @@ func copyHeader(dst, src http.Header) {
 	}
 }
 
-func tcpProxy(rw http.ResponseWriter, outreq *http.Request) {
+func (p *ReverseProxy) tcpProxy(rw http.ResponseWriter, outreq *http.Request) {
 	clientConn, _, err := rw.(http.Hijacker).Hijack()
 	if err != nil {
-		fmt.Println(err)
-		panic("Fail to hijack.")
+		p.logf("rproxy: fail to hijack: %v", err)
+		rw.WriteHeader(http.StatusInternalServerError)
+		return
 	}
 	defer clientConn.Close()
 
@@ -117,7 +117,9 @@ func tcpProxy(rw http.ResponseWriter, outreq *http.Request) {
 	}
 	serverConn, err := net.Dial("tcp", host)
 	if err != nil {
-		panic("Can't connect to " + host)
+		p.logf("rproxy: can't connect to %s: %v", host, err)
+		rw.WriteHeader(http.StatusInternalServerError)
+		return
 	}
 	defer serverConn.Close()
 
@@ -241,7 +243,7 @@ func (p *ReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	}
 
 	if upgrading {
-		tcpProxy(rw, outreq)
+		p.tcpProxy(rw, outreq)
 		return
 	}
 
