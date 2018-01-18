@@ -153,7 +153,9 @@ func (p *ReverseProxy) dialTLS(network, addr string) (net.Conn, error) {
 	}
 
 	cfg := new(tls.Config)
-	*cfg = *p.TLSClientConfig
+	if p.TLSClientConfig != nil {
+		*cfg = *p.TLSClientConfig
+	}
 	if cfg.ServerName == "" {
 		if hasPort(addr) {
 			cfg.ServerName = addr[:strings.LastIndex(addr, ":")]
